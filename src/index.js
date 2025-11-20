@@ -1,5 +1,7 @@
 import { Client } from "@xmtp/xmtp-js";
 import { Wallet } from "ethers";
+import { ContentTypeText, TextCodec } from "@xmtp/content-type-text";
+
 import { handleMessage } from "./bot.js";
 import { handleFlow, flowState } from "./flow.js";
 import { barschForecast } from "./barschEngine.js";
@@ -12,41 +14,48 @@ export async function startBot(privateKey) {
       return;
     }
 
-    // Aus Hex-String → Ethers-Wallet (Signer für XMTP)
+    // 1) Signer vorbereiten
     const signer = new Wallet(privateKey);
 
-    const xmtp = await Client.create(signer, { env: "production" });
+    // 2) XMTP-Client für V3 erstellen
+    const xmtp = await Client.create(signer, {
+      env: "production",
+      codecs: [new TextCodec()],
+    });
 
-    console.log("✅ SONR Barsch-Bot XMTP connected:", xmtp.address);
+    console.log("✅ SONR Barsch-Bot (XMTP V3) verbunden:", xmtp.address);
 
-    (async () => {
-      for await (const msg of await xmtp.conversations.streamAllMessages()) {
-        console.log("📩 Nachricht:", msg.content);
+    // 3) Streaming aller eingehenden Messages
+    for await (const msg of xmtp.streamMessages()) {
+      // Eigene Messages ignorieren
+      if (msg.senderAddress === xmtp.address) continue;
 
-        if (msg.senderAddress === xmtp.address) continue;
+      const text = msg.content;
 
-        const base = await handleMessage(msg);
+      console.log("📩 Nachricht:", text);
 
-        if (base?.next === "tiefe") {
-          flowState[msg.senderAddress] = { step: "tiefe", data: {} };
-          continue;
-        }
+      // Flow-Logik
+      const base = await handleMessage(msg);
 
-        const userState = await handleFlow(msg);
-
-        if (userState?.data?.fuehrung) {
-          const weather = await getWeather();
-          const result = barschForecast(userState.data, weather);
-
-          await msg.conversation.send(
-            `🎣 **SONR Barsch-Score:** ${result.score}/100\n\n${result.text}`
-          );
-
-          flowState[msg.senderAddress] = { step: null, data: {} };
-        }
+      if (base?.next === "tiefe") {
+        flowState[msg.senderAddress] = { step: "tiefe", data: {} };
+        continue;
       }
-    })();
+
+      const userState = await handleFlow(msg);
+
+      if (userState?.data?.fuehrung) {
+        const weather = await getWeather();
+        const result = barschForecast(userState.data, weather);
+
+        await msg.reply(
+          `🎣 **SONR Barsch-Score:** ${result.score}/100\n\n${result.text}`
+        );
+
+        flowState[msg.senderAddress] = { step: null, data: {} };
+      }
+    }
   } catch (err) {
-    console.error("❌ Fehler im Bot:", err);
+    console.error("❌ Fehler im Bot (V3):", err);
   }
 }
