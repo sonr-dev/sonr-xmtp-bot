@@ -1,57 +1,45 @@
 import { Client } from "@xmtp/xmtp-js";
-import dotenv from "dotenv";
 import { handleMessage } from "./bot.js";
 import { handleFlow, flowState } from "./flow.js";
 import { barschForecast } from "./barschEngine.js";
 import { getWeather } from "./weather.js";
 
-dotenv.config();
-
-async function startBot() {
-  const privateKey = process.env.BOT_PRIVATE_KEY;
-
+export async function startBot(privateKey) {
   if (!privateKey) {
-    console.error("❌ Kein BOT_PRIVATE_KEY gefunden! Bitte in Vercel .env eintragen.");
-    process.exit(1);
+    console.error("❌ BOT_PRIVATE_KEY fehlt!");
+    return;
   }
 
-  // XMTP-Client erstellen
   const xmtp = await Client.create(privateKey, { env: "production" });
+  console.log("✅ SONR Barsch-Bot ist mit XMTP verbunden:", xmtp.address);
 
-  console.log("✅ SONR Barsch-Bot verbunden mit XMTP");
+  // NICHT blockieren → kein for await!
+  // Stattdessen Event-Stream starten, der nicht blockiert:
+  (async () => {
+    for await (const msg of await xmtp.conversations.streamAllMessages()) {
+      console.log("📩 Nachricht:", msg.content);
 
-  // Nachrichtenstream starten
-  for await (const msg of await xmtp.conversations.streamAllMessages()) {
-    console.log("📩 Nachricht erhalten:", msg.content);
+      if (msg.senderAddress === xmtp.address) continue;
 
-    // Sicherheitscheck: ignoriere eigene Nachrichten
-    if (msg.senderAddress === xmtp.address) continue;
+      const base = await handleMessage(msg);
 
-    // 1) Kommandos wie "start" oder "barsch"
-    const base = await handleMessage(msg);
+      if (base?.next === "tiefe") {
+        flowState[msg.senderAddress] = { step: "tiefe", data: {} };
+        continue;
+      }
 
-    // Falls Flow starten soll
-    if (base?.next === "tiefe") {
-      flowState[msg.senderAddress] = { step: "tiefe", data: {} };
-      return;
+      const userState = await handleFlow(msg);
+
+      if (userState?.data?.fuehrung) {
+        const weather = await getWeather();
+        const result = barschForecast(userState.data, weather);
+
+        await msg.conversation.send(
+          `🎣 **SONR Barsch-Score:** ${result.score}/100\n\n${result.text}`
+        );
+
+        flowState[msg.senderAddress] = { step: null, data: {} };
+      }
     }
-
-    // 2) Falls Nutzer mitten im Flow ist
-    const userState = await handleFlow(msg);
-
-    // Wenn userState vollständig ist → Barsch-Vorhersage erstellen
-    if (userState?.data?.fuehrung) {
-      const weather = await getWeather();
-      const result = barschForecast(userState.data, weather);
-
-      await msg.conversation.send(
-        `🎣 **SONR Barsch-Score:** ${result.score}/100\n\n${result.text}`
-      );
-
-      // Flow für diesen Nutzer zurücksetzen
-      flowState[msg.senderAddress] = { step: null, data: {} };
-    }
-  }
+  })();
 }
-
-startBot();
