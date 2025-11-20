@@ -4,8 +4,8 @@
   "type": "module",
   "dependencies": {
     "@xmtp/xmtp-js": "^13.1.0",
-    "@xmtp/proto": "^3.0.0",
-    "@xmtp/content-type-text": "^3.0.0",
+    "@xmtp/proto": "^2.0.0",
+    "@xmtp/content-type-text": "^1.0.0",
     "ethers": "^6.11.1"
   }
 }
